@@ -38,7 +38,7 @@ trait MonadCancel[F[_], E] extends MonadError[F, E] {
   def uncancelable[A](body: Poll[F] => F[A]): F[A]
 
   // produces an effect which is already canceled (and doesn't introduce an async boundary)
-  // this is effectively a way for a fiber to commit suicide and yield back to its parent
+  // this is effectively a way for a fiber to terminate itself and yield back to its parent
   // The fallback (unit) value is produced if the effect is sequenced into a block in which
   // cancelation is suppressed.
   def canceled: F[Unit]
