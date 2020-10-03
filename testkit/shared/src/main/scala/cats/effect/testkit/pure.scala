@@ -214,61 +214,74 @@ object pure {
       def ref[A](a: A): PureConc[E, Ref[PureConc[E, *], A]] =
         MVar[PureConc[E, *], A](a).flatMap(mVar => Kleisli.pure(unsafeRef(mVar)))
 
+      def intRef(a: Int): PureConc[E, IntRef[PureConc[E, *]]] =
+        MVar[PureConc[E, *], Int](a).flatMap(mVar => Kleisli.pure(unsafeIntRef(mVar)))
+
       def deferred[A]: PureConc[E, Deferred[PureConc[E, *], A]] =
         MVar.empty[PureConc[E, *], A].flatMap(mVar => Kleisli.pure(unsafeDeferred(mVar)))
 
-      private def unsafeRef[A](mVar: MVar[A]): Ref[PureConc[E, *], A] =
-        new Ref[PureConc[E, *], A] {
-          override def get: PureConc[E, A] = mVar.read[PureConc[E, *]]
-
-          override def set(a: A): PureConc[E, Unit] = modify(_ => (a, ()))
-
-          override def access: PureConc[E, (A, A => PureConc[E, Boolean])] =
-            uncancelable { _ =>
-              mVar.read[PureConc[E, *]].flatMap { a =>
-                MVar.empty[PureConc[E, *], Unit].map { called =>
-                  val setter = (au: A) =>
-                    called
-                      .tryPut[PureConc[E, *]](())
-                      .ifM(
-                        pure(false),
-                        mVar.take[PureConc[E, *]].flatMap { ay =>
-                          if (a == ay) mVar.put[PureConc[E, *]](au).as(true) else pure(false)
-                        })
-                  (a, setter)
-                }
-              }
-            }
-
-          override def tryUpdate(f: A => A): PureConc[E, Boolean] =
-            update(f).as(true)
-
-          override def tryModify[B](f: A => (A, B)): PureConc[E, Option[B]] =
-            modify(f).map(Some(_))
-
-          override def update(f: A => A): PureConc[E, Unit] =
-            uncancelable { _ =>
-              mVar.take[PureConc[E, *]].flatMap(a => mVar.put[PureConc[E, *]](f(a)))
-            }
-
-          override def modify[B](f: A => (A, B)): PureConc[E, B] =
-            uncancelable { _ =>
-              mVar.take[PureConc[E, *]].flatMap { a =>
-                val (a2, b) = f(a)
-                mVar.put[PureConc[E, *]](a2).as(b)
-              }
-            }
-
-          override def tryModifyState[B](state: State[A, B]): PureConc[E, Option[B]] = {
-            val f = state.runF.value
-            tryModify(a => f(a).value)
-          }
-
-          override def modifyState[B](state: State[A, B]): PureConc[E, B] = {
-            val f = state.runF.value
-            modify(a => f(a).value)
-          }
+      def unsafeRef[A](mv: MVar[A]): Ref[PureConc[E, *], A] =
+        new PureConcRef[A] {
+          def mVar: MVar[A] = mv
         }
+
+      def unsafeIntRef(mv: MVar[Int]): IntRef[PureConc[E, *]] =
+        new IntRef[PureConc[E, *]] with PureConcRef[Int] {
+          def mVar: MVar[Int] = mv
+        }
+      private trait PureConcRef[A] extends Ref[PureConc[E, *], A] {
+        def mVar: MVar[A]
+
+        override def get: PureConc[E, A] = mVar.read[PureConc[E, *]]
+
+        override def set(a: A): PureConc[E, Unit] = modify(_ => (a, ()))
+
+        override def access: PureConc[E, (A, A => PureConc[E, Boolean])] =
+          uncancelable { _ =>
+            mVar.read[PureConc[E, *]].flatMap { a =>
+              MVar.empty[PureConc[E, *], Unit].map { called =>
+                val setter = (au: A) =>
+                  called
+                    .tryPut[PureConc[E, *]](())
+                    .ifM(
+                      pure(false),
+                      mVar.take[PureConc[E, *]].flatMap { ay =>
+                        if (a == ay) mVar.put[PureConc[E, *]](au).as(true) else pure(false)
+                      })
+                (a, setter)
+              }
+            }
+          }
+
+        override def tryUpdate(f: A => A): PureConc[E, Boolean] =
+          update(f).as(true)
+
+        override def tryModify[B](f: A => (A, B)): PureConc[E, Option[B]] =
+          modify(f).map(Some(_))
+
+        override def update(f: A => A): PureConc[E, Unit] =
+          uncancelable { _ =>
+            mVar.take[PureConc[E, *]].flatMap(a => mVar.put[PureConc[E, *]](f(a)))
+          }
+
+        override def modify[B](f: A => (A, B)): PureConc[E, B] =
+          uncancelable { _ =>
+            mVar.take[PureConc[E, *]].flatMap { a =>
+              val (a2, b) = f(a)
+              mVar.put[PureConc[E, *]](a2).as(b)
+            }
+          }
+
+        override def tryModifyState[B](state: State[A, B]): PureConc[E, Option[B]] = {
+          val f = state.runF.value
+          tryModify(a => f(a).value)
+        }
+
+        override def modifyState[B](state: State[A, B]): PureConc[E, B] = {
+          val f = state.runF.value
+          modify(a => f(a).value)
+        }
+      }
 
       private def unsafeDeferred[A](mVar: MVar[A]): Deferred[PureConc[E, *], A] =
         new Deferred[PureConc[E, *], A] {

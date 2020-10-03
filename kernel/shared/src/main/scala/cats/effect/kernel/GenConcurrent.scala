@@ -29,6 +29,8 @@ trait GenConcurrent[F[_], E] extends GenSpawn[F, E] {
 
   def ref[A](a: A): F[Ref[F, A]]
 
+  def intRef(i: Int): F[IntRef[F]]
+
   def deferred[A]: F[Deferred[F, A]]
 
   def memoize[A](fa: F[A]): F[F[A]] = {
@@ -204,6 +206,9 @@ object GenConcurrent {
     override def ref[A](a: A): OptionT[F, Ref[OptionT[F, *], A]] =
       OptionT.liftF(F.map(F.ref(a))(_.mapK(OptionT.liftK)))
 
+    override def intRef(a: Int): OptionT[F, IntRef[OptionT[F, *]]] =
+      OptionT.liftF(F.map(F.intRef(a))(_.mapK(OptionT.liftK)))
+
     override def deferred[A]: OptionT[F, Deferred[OptionT[F, *], A]] =
       OptionT.liftF(F.map(F.deferred[A])(_.mapK(OptionT.liftK)))
 
@@ -222,6 +227,9 @@ object GenConcurrent {
 
     override def ref[A](a: A): EitherT[F, E0, Ref[EitherT[F, E0, *], A]] =
       EitherT.liftF(F.map(F.ref(a))(_.mapK(EitherT.liftK)))
+
+    override def intRef(a: Int): EitherT[F, E0, IntRef[EitherT[F, E0, *]]] =
+      EitherT.liftF(F.map(F.intRef(a))(_.mapK(EitherT.liftK)))
 
     override def deferred[A]: EitherT[F, E0, Deferred[EitherT[F, E0, *], A]] =
       EitherT.liftF(F.map(F.deferred[A])(_.mapK(EitherT.liftK)))
@@ -242,6 +250,9 @@ object GenConcurrent {
 
     override def ref[A](a: A): Kleisli[F, R, Ref[Kleisli[F, R, *], A]] =
       Kleisli.liftF(F.map(F.ref(a))(_.mapK(Kleisli.liftK)))
+
+    override def intRef(a: Int): Kleisli[F, R, IntRef[Kleisli[F, R, *]]] =
+      Kleisli.liftF(F.map(F.intRef(a))(_.mapK(Kleisli.liftK)))
 
     override def deferred[A]: Kleisli[F, R, Deferred[Kleisli[F, R, *], A]] =
       Kleisli.liftF(F.map(F.deferred[A])(_.mapK(Kleisli.liftK)))
@@ -265,6 +276,9 @@ object GenConcurrent {
     override def ref[A](a: A): IorT[F, L, Ref[IorT[F, L, *], A]] =
       IorT.liftF(F.map(F.ref(a))(_.mapK(IorT.liftK)))
 
+    override def intRef(a: Int): IorT[F, L, IntRef[IorT[F, L, *]]] =
+      IorT.liftF(F.map(F.intRef(a))(_.mapK(IorT.liftK)))
+
     override def deferred[A]: IorT[F, L, Deferred[IorT[F, L, *], A]] =
       IorT.liftF(F.map(F.deferred[A])(_.mapK(IorT.liftK)))
 
@@ -287,6 +301,9 @@ object GenConcurrent {
 
     override def ref[A](a: A): WriterT[F, L, Ref[WriterT[F, L, *], A]] =
       WriterT.liftF(F.map(F.ref(a))(_.mapK(WriterT.liftK)))
+
+    override def intRef(a: Int): WriterT[F, L, IntRef[WriterT[F, L, *]]] =
+      WriterT.liftF(F.map(F.intRef(a))(_.mapK(WriterT.liftK)))
 
     override def deferred[A]: WriterT[F, L, Deferred[WriterT[F, L, *], A]] =
       WriterT.liftF(F.map(F.deferred[A])(_.mapK(WriterT.liftK)))

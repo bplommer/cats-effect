@@ -29,8 +29,9 @@ import cats.{
   Traverse
 }
 import cats.syntax.all._
-import cats.effect.instances.spawn
 import cats.effect.std.Console
+import cats.effect.instances.spawn
+import cats.effect.kernel.{Deferred, IntRef, Ref}
 
 import scala.annotation.unchecked.uncheckedVariance
 import scala.concurrent.{ExecutionContext, Future, Promise, TimeoutException}
@@ -569,6 +570,8 @@ object IO extends IOCompanionPlatform with IOLowPriorityImplicits {
       fa.redeemWith(recover, bind)
 
     override def ref[A](a: A): IO[Ref[IO, A]] = IO.ref(a)
+
+    override def intRef(i: Int): IO[IntRef[IO]] = IO(Ref.unsafeInt(i))
 
     override def deferred[A]: IO[Deferred[IO, A]] = IO.deferred
   }

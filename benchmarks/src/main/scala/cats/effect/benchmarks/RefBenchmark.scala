@@ -22,7 +22,6 @@ import cats.effect.unsafe.implicits.global
 import org.openjdk.jmh.annotations._
 
 import java.util.concurrent.TimeUnit
-import cats.effect.kernel.Ref
 
 /**
  * To do comparative benchmarks between versions:
@@ -54,7 +53,7 @@ class RefBenchmark {
 
 object RefBenchmark {
   def modify(iterations: Int): Unit = {
-    Ref[IO].of(0L).flatMap { ref =>
+    IO.ref(0L).flatMap { ref =>
       def loop(remaining: Int, acc: Long): IO[Long] = {
         if (remaining == 0) IO(acc)
         else ref.modify(n => (n + 1, n)).flatMap(prev => loop(remaining - 1, acc + prev))
@@ -64,7 +63,7 @@ object RefBenchmark {
   }.void.unsafeRunSync()
 
   def getAndUpdate(iterations: Int): Unit = {
-    Ref[IO].of(0L).flatMap { ref =>
+    IO.ref(0L).flatMap { ref =>
       def loop(remaining: Int, acc: Long): IO[Long] = {
         if (remaining == 0) IO(acc)
         else ref.getAndUpdate(_ + 1).flatMap(prev => loop(remaining - 1, acc + prev))

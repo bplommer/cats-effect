@@ -22,12 +22,14 @@ import java.util.concurrent.atomic.{AtomicBoolean, AtomicReference}
 
 import cats.data.State
 import cats.effect.kernel.Ref.TransformedRef
+import cats.effect.kernel.IntRef.SyncIntRef
 import cats.instances.function._
 import cats.instances.tuple._
 import cats.syntax.bifunctor._
 import cats.syntax.functor._
 
 import scala.annotation.tailrec
+import java.util.concurrent.atomic.AtomicInteger
 
 /**
  * An asynchronous, concurrent mutable reference.
@@ -150,6 +152,7 @@ object Ref {
     "Cannot find an instance for Ref.Make. Add implicit evidence of Concurrent[${F}, _] or Sync[${F}] to scope to automatically derive one.")
   trait Make[F[_]] {
     def refOf[A](a: A): F[Ref[F, A]]
+    def refOfInt(i: Int): F[IntRef[F]]
   }
 
   object Make extends MakeInstances
@@ -158,6 +161,7 @@ object Ref {
     implicit def concurrentInstance[F[_]](implicit F: GenConcurrent[F, _]): Make[F] =
       new Make[F] {
         override def refOf[A](a: A): F[Ref[F, A]] = F.ref(a)
+        override def refOfInt(i: Int): F[IntRef[F]] = F.intRef(i)
       }
   }
 
@@ -165,6 +169,34 @@ object Ref {
     implicit def syncInstance[F[_]](implicit F: Sync[F]): Make[F] =
       new Make[F] {
         override def refOf[A](a: A): F[Ref[F, A]] = F.delay(unsafe(a))
+        override def refOfInt(i: Int): F[IntRef[F]] = F.delay(unsafeInt(i))
+      }
+  }
+
+  sealed trait MakeOf[A] {
+    type Out[F[_]] <: Ref[F, A]
+    def make[F[_]: Make](a: A): F[Out[F]]
+  }
+
+  object MakeOf extends MakeOfInstances {
+    type Aux[A, Out0[_[_]]] = MakeOf[A] {
+      type Out[F[_]] = Out0[F]
+    }
+  }
+
+  private[kernel] trait MakeOfInstances extends MakeOfLowPriorityInstances {
+    implicit def makeOfInt: MakeOf.Aux[Int, IntRef] =
+      new MakeOf[Int] {
+        type Out[F[_]] = IntRef[F]
+        def make[F[_]](a: Int)(implicit make: Make[F]): F[IntRef[F]] = make.refOfInt(a)
+      }
+  }
+
+  private[kernel] trait MakeOfLowPriorityInstances {
+    implicit def makeOf[A]: MakeOf.Aux[A, Ref[*[_], A]] =
+      new MakeOf[A] {
+        type Out[F[_]] = Ref[F, A]
+        def make[F[_]](a: A)(implicit make: Make[F]): F[Ref[F, A]] = make.refOf(a)
       }
   }
 
@@ -196,7 +228,7 @@ object Ref {
    *   } yield ten
    * }}}
    */
-  def of[F[_], A](a: A)(implicit mk: Make[F]): F[Ref[F, A]] = mk.refOf(a)
+  def of[F[_], A](a: A)(implicit mk: Make[F], mkOf: MakeOf[A]): F[mkOf.Out[F]] = mkOf.make(a)
 
   /**
    * Creates a Ref starting with the value of the one in `source`.
@@ -209,7 +241,7 @@ object Ref {
   /**
    * Creates a Ref starting with the result of the effect `fa`.
    */
-  def ofEffect[F[_]: Make: FlatMap, A](fa: F[A]): F[Ref[F, A]] =
+  def ofEffect[F[_]: Make: FlatMap, A](fa: F[A])(implicit mkOf: MakeOf[A]): F[mkOf.Out[F]] =
     FlatMap[F].flatMap(fa)(of(_))
 
   /**
@@ -255,6 +287,9 @@ object Ref {
   def unsafe[F[_], A](a: A)(implicit F: Sync[F]): Ref[F, A] =
     new SyncRef[F, A](new AtomicReference[A](a))
 
+  def unsafeInt[F[_]](i: Int)(implicit F: Sync[F]): IntRef[F] =
+    new SyncIntRef[F](new AtomicInteger(i))
+
   /**
    *  Builds a `Ref` value for data types that are [[Sync]]
    *  Like [[of]] but initializes state using another effect constructor
@@ -287,7 +322,8 @@ object Ref {
      *
      * @see [[Ref.of]]
      */
-    def of[A](a: A): F[Ref[F, A]] = mk.refOf(a)
+    def of[A](a: A)(implicit ev: MakeOf[A]): F[ev.Out[F]] = ev.make(a)(mk)
+
   }
 
   final private class SyncRef[F[_], A](ar: AtomicReference[A])(implicit F: Sync[F])
@@ -481,4 +517,122 @@ object Ref {
             fa.modifyState(state.dimap(f)(g))
         }
     }
+}
+
+abstract class IntRef[F[_]] extends Ref[F, Int] {
+  def addAndGet(delta: Int): F[Int] = updateAndGet(_ + delta)
+  def getAndAdd(delta: Int): F[Int] = getAndUpdate(_ + delta)
+
+  override def mapK[G[_]](f: F ~> G)(implicit F: Functor[F]): IntRef[G] =
+    new IntRef.TransformedIntRef(this, f)
+}
+
+object IntRef {
+  final private[kernel] class SyncIntRef[F[_]](ar: AtomicInteger)(implicit F: Sync[F])
+      extends IntRef[F] {
+    override def addAndGet(delta: Int): F[Int] = F.delay(ar.addAndGet(delta))
+    override def getAndAdd(delta: Int): F[Int] = F.delay(ar.getAndAdd(delta))
+
+    def get: F[Int] = F.delay(ar.get)
+
+    def set(a: Int): F[Unit] = F.delay(ar.set(a))
+
+    override def getAndSet(a: Int): F[Int] = F.delay(ar.getAndSet(a))
+
+    override def getAndUpdate(f: Int => Int): F[Int] = {
+      @tailrec
+      def spin: Int = {
+        val a = ar.get
+        val u = f(a)
+        if (!ar.compareAndSet(a, u)) spin
+        else a
+      }
+      F.delay(spin)
+    }
+
+    def access: F[(Int, Int => F[Boolean])] =
+      F.delay {
+        val snapshot = ar.get
+        val hasBeenCalled = new AtomicBoolean(false)
+        def setter =
+          (a: Int) =>
+            F.delay(hasBeenCalled.compareAndSet(false, true) && ar.compareAndSet(snapshot, a))
+        (snapshot, setter)
+      }
+
+    def tryUpdate(f: Int => Int): F[Boolean] =
+      F.map(tryModify(a => (f(a), ())))(_.isDefined)
+
+    def tryModify[B](f: Int => (Int, B)): F[Option[B]] =
+      F.delay {
+        val c = ar.get
+        val (u, b) = f(c)
+        if (ar.compareAndSet(c, u)) Some(b)
+        else None
+      }
+
+    def update(f: Int => Int): F[Unit] = {
+      @tailrec
+      def spin(): Unit = {
+        val a = ar.get
+        val u = f(a)
+        if (!ar.compareAndSet(a, u)) spin()
+      }
+      F.delay(spin())
+    }
+
+    override def updateAndGet(f: Int => Int): F[Int] = {
+      @tailrec
+      def spin: Int = {
+        val a = ar.get
+        val u = f(a)
+        if (!ar.compareAndSet(a, u)) spin
+        else u
+      }
+      F.delay(spin)
+    }
+
+    def modify[B](f: Int => (Int, B)): F[B] = {
+      @tailrec
+      def spin: B = {
+        val c = ar.get
+        val (u, b) = f(c)
+        if (!ar.compareAndSet(c, u)) spin
+        else b
+      }
+      F.delay(spin)
+    }
+
+    def tryModifyState[B](state: State[Int, B]): F[Option[B]] = {
+      val f = state.runF.value
+      tryModify(a => f(a).value)
+    }
+
+    def modifyState[B](state: State[Int, B]): F[B] = {
+      val f = state.runF.value
+      modify(a => f(a).value)
+    }
+  }
+
+  final private[kernel] class TransformedIntRef[F[_], G[_]](
+      underlying: IntRef[F],
+      trans: F ~> G)(
+      implicit F: Functor[F]
+  ) extends IntRef[G] {
+    override def get: G[Int] = trans(underlying.get)
+    override def set(a: Int): G[Unit] = trans(underlying.set(a))
+    override def getAndSet(a: Int): G[Int] = trans(underlying.getAndSet(a))
+    override def tryUpdate(f: Int => Int): G[Boolean] = trans(underlying.tryUpdate(f))
+    override def tryModify[B](f: Int => (Int, B)): G[Option[B]] = trans(underlying.tryModify(f))
+    override def update(f: Int => Int): G[Unit] = trans(underlying.update(f))
+    override def modify[B](f: Int => (Int, B)): G[B] = trans(underlying.modify(f))
+    override def tryModifyState[B](state: State[Int, B]): G[Option[B]] =
+      trans(underlying.tryModifyState(state))
+    override def modifyState[B](state: State[Int, B]): G[B] =
+      trans(underlying.modifyState(state))
+    override def access: G[(Int, Int => G[Boolean])] =
+      trans(F.compose[(Int, *)].compose[Int => *].map(underlying.access)(trans(_)))
+    override def addAndGet(delta: Int): G[Int] = trans(underlying.addAndGet(delta))
+    override def getAndAdd(delta: Int): G[Int] = trans(underlying.getAndAdd(delta))
+  }
 }

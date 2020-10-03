@@ -19,7 +19,16 @@ package testkit
 
 import cats.{~>, Group, Monad, Monoid, Order}
 import cats.data.Kleisli
-import cats.effect.kernel.{Deferred, Fiber, GenConcurrent, GenTemporal, Outcome, Poll, Ref}
+import cats.effect.kernel.{
+  Deferred,
+  Fiber,
+  GenConcurrent,
+  GenTemporal,
+  IntRef,
+  Outcome,
+  Poll,
+  Ref
+}
 import cats.syntax.all._
 import org.scalacheck.{Arbitrary, Cogen, Gen}
 
@@ -195,6 +204,9 @@ object TimeT {
 
     override def ref[A](a: A): TimeT[F, Ref[TimeT[F, *], A]] =
       Kleisli.liftF(F.map(F.ref(a))(_.mapK(Kleisli.liftK)))
+
+    override def intRef(a: Int): TimeT[F, IntRef[TimeT[F, *]]] =
+      Kleisli.liftF(F.map(F.intRef(a))(_.mapK(Kleisli.liftK)))
 
     override def deferred[A]: TimeT[F, Deferred[TimeT[F, *], A]] =
       Kleisli.liftF(F.map(F.deferred[A])(_.mapK(Kleisli.liftK)))
